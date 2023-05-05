@@ -41,7 +41,7 @@ void compute(){
 		//compute the new position based on the velocity and time interval
 		for (k=0;k<3;k++){
 			hVel[i][k]+=accel_sum[k]*INTERVAL;
-			hPos[i][k]=hVel[i][k]*INTERVAL;
+			hPos[i][k]+=hVel[i][k]*INTERVAL;
 		}
 	}
 	free(accels);

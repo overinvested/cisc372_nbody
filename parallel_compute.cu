@@ -1,11 +1,21 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
 #include "vector.h"
 #include "config.h"
 #include "parallel_compute.h"
+#include <unistd.h>
+
+#define cudaCheckError() {                                          \
+ cudaError_t e=cudaGetLastError();                                 \
+ if(e!=cudaSuccess) {                                              \
+   printf("Cuda failure %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e));           \
+   exit(0); \
+ }                                                                 \
+}
 
 
-extern vector3 *d_values, **d_accels, **d_hPos, **d_hVel, *d_accel_sum;
+extern vector3 *d_values, **d_accels, *d_hPos, *d_hVel, *d_accel_sum;
 extern double *d_mass;
 
 
@@ -20,14 +30,22 @@ void compute(){
 	// vector3** accels=(vector3**)malloc(sizeof(vector3*)*NUMENTITIES);
 	
 	
-	int numBlocks = 1;
-	dim3 threadsPerBlock(NUMENTITIES, NUMENTITIES, 3);
-	int sharedMemorySize = 2*NUMENTITIES*sizeof(double);
-	mapValuestoAccels<<<numBlocks, threadsPerBlock>>>(d_values, d_accels);
+	int blocksPerDim=(NUMENTITIES+15)/16;
+	dim3 threadsPerBlock(16, 16, 3);
+	dim3 numBlocks(blocksPerDim,blocksPerDim);
+	// mapValuestoAccels<<<numBlocks, threadsPerBlock>>>(d_values, d_accels);
+	// cudaCheckError();
 	fillAccelSum<<<numBlocks, threadsPerBlock>>>(d_accel_sum);
+	cudaCheckError();
 	calculateAccels<<<numBlocks, threadsPerBlock>>>(d_accels, d_hPos, d_mass);
-	sumColumns<<<numBlocks, threadsPerBlock, sharedMemorySize>>>(d_accels, d_accel_sum, NUMENTITIES);
+	cudaCheckError();
+	int sumThreads = 1024;
+	dim3 sumBlocks(NUMENTITIES,3);
+	int sharedMemorySize = 2*sumThreads*sizeof(double);
+	sumColumns<<<sumBlocks, sumThreads, sharedMemorySize>>>(d_accels, d_accel_sum);
+	cudaCheckError();
 	updatePositionAndVelocity<<<numBlocks, threadsPerBlock>>>(d_accel_sum, d_hPos, d_hVel);
+	cudaCheckError();
 
 
 	// for (i=0;i<NUMENTITIES;i++)
@@ -69,7 +87,10 @@ void compute(){
 
 __global__ void mapValuestoAccels(vector3* values, vector3** accels)
 {
-	int i = threadIdx.x;
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int j = threadIdx.y + blockIdx.y * blockDim.y;
+	int k = threadIdx.z;
+	if (i >= NUMENTITIES || j > 0 || k > 0) return;
 
 	accels[i] = &values[i*NUMENTITIES];
 }
@@ -77,44 +98,50 @@ __global__ void mapValuestoAccels(vector3* values, vector3** accels)
 
 __global__ void fillAccelSum(vector3* accel_sum)
 {
-	int i = threadIdx.x;
-	FILL_VECTOR(accel_sum[i],0,0,0);
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int j = threadIdx.y + blockIdx.y * blockDim.y;
+	int k = threadIdx.z;
+
+	if (i >= NUMENTITIES || j > 0) return;
+	// FILL_VECTOR(accel_sum[i],0,0,0);
+	accel_sum[i][k] = 0;
 	// *accel_sum[i] = {0,0,0};
 }
 
 
-__global__ void calculateAccels(vector3** accels, vector3** hPos, double* mass)
+__global__ void calculateAccels(vector3** accels, vector3* hPos, double* mass)
 {
-	int i = threadIdx.x;
-	int j = threadIdx.y;
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int j = threadIdx.y + blockIdx.y * blockDim.y;
+	int k = threadIdx.z;
+	if (i >= NUMENTITIES || j >= NUMENTITIES) return;
 	if (i==j)
 	{
-		FILL_VECTOR(accels[i][j],0,0,0);
+		accels[i][j][k] = 0;
 	}
 	else
 	{
 		vector3 distance;
-		for (int k = 0; k < 3; k++)
-		{
-			distance[k] = hPos[i][k] - hPos[j][k];
-		}
+		distance[k] = hPos[i][k] - hPos[j][k];
+		__syncthreads();
 		double magnitude_sq = distance[0] * distance[0] + distance[1] * distance[1] + distance[2] * distance[2];
 		double magnitude = sqrt(magnitude_sq);
 		double accelmag = -1 * GRAV_CONSTANT * mass[j] / magnitude_sq;
-		FILL_VECTOR(accels[i][j],accelmag*distance[0]/magnitude,accelmag*distance[1]/magnitude,accelmag*distance[2]/magnitude);
+		accels[i][j][k]=accelmag*distance[k]/magnitude;
 	}
 }
 
 
-__global__ void sumColumns(vector3** accels, vector3* accel_sum, int blocksize)
+__global__ void sumColumns(vector3** accels, vector3* accel_sum)
 {
 	int rowIndex = threadIdx.x;
-	int colIndex = threadIdx.y;
-	int dimension = threadIdx.z;
+	int colIndex = blockIdx.x;
+	int dimension = blockIdx.y;
 	__shared__ int offset;
-	int arraysize = blocksize*2;
-	extern __shared__ vector3 shArr[];
-	shArr[rowIndex][dimension] = rowIndex < arraysize ? accels[rowIndex][colIndex][dimension] : 0;
+	int blocksize = blockDim.x;
+	int arraysize = NUMENTITIES;
+	extern __shared__ double shArr[];
+	shArr[rowIndex] = rowIndex < arraysize ? accels[colIndex][rowIndex][dimension] : 0;
 	if (rowIndex == 0)
 	{
 		offset = blocksize;
@@ -122,38 +149,39 @@ __global__ void sumColumns(vector3** accels, vector3* accel_sum, int blocksize)
 	__syncthreads();
 	while (offset < arraysize)
 	{
-		shArr[rowIndex+blocksize][dimension] = rowIndex+blocksize < arraysize ? accels[rowIndex+offset][colIndex][dimension] : 0;
+		shArr[rowIndex+blocksize] = rowIndex+blocksize < arraysize ? accels[colIndex][rowIndex+offset][dimension] : 0;
 		__syncthreads();
 		if (rowIndex == 0)
 		{
 			offset += blocksize;
 		}
-		double sum = shArr[2*rowIndex][dimension] + shArr[2*rowIndex+1][dimension];
+		double sum = shArr[2*rowIndex] + shArr[2*rowIndex+1];
 		__syncthreads();
-		shArr[rowIndex][dimension] = sum;
+		shArr[rowIndex] = sum;
 	}
 	__syncthreads();
-	for (int stride = 1; stride < blocksize; stride<<=1)
+	for (int stride = 1; stride < blocksize; stride*=2)
 	{
 		int arrIdx = rowIndex*stride*2;
 		if (arrIdx+stride < blocksize)
 		{
-			shArr[arrIdx][dimension] += shArr[arrIdx+stride][dimension];
+			shArr[arrIdx] += shArr[arrIdx+stride];
 		}
 		__syncthreads();
 	}
 	if (rowIndex == 0)
 	{
-		accel_sum[colIndex][dimension] = shArr[0][dimension];
+		accel_sum[colIndex][dimension] = shArr[0];
 	}
 }
 
-__global__ void updatePositionAndVelocity(vector3* accel_sum, vector3** hPos, vector3** hVel)
+__global__ void updatePositionAndVelocity(vector3* accel_sum, vector3* hPos, vector3* hVel)
 {
-	int i = threadIdx.x;
-	// int j = threadIdx.y;
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int j = threadIdx.y + blockIdx.y * blockDim.y;
 	int k = threadIdx.z;
+	if (i >= NUMENTITIES || j > 0) return;
 
-	*hVel[i][k] += *accel_sum[k] * INTERVAL;
-	*hPos[i][k] = *hVel[i][k] * INTERVAL;
+	hVel[i][k] += accel_sum[i][k] * INTERVAL;
+	hPos[i][k] += hVel[i][k] * INTERVAL;
 }

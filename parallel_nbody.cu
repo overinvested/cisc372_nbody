@@ -7,12 +7,20 @@
 #include "planets.h"
 #include "parallel_compute.h"
 
+#define cudaCheckError() {                                          \
+ cudaError_t e=cudaGetLastError();                                 \
+ if(e!=cudaSuccess) {                                              \
+   printf("Cuda failure %s:%d: '%s'\n",__FILE__,__LINE__,cudaGetErrorString(e));           \
+   exit(0); \
+ }                                                                 \
+}
+
 // represents the objects in the system.  Global variables
 vector3 *hVel;
 vector3 *hPos;
 double *mass;
 
-vector3 *d_values, **d_accels, **d_hPos, **d_hVel, *d_accel_sum;
+vector3 *d_values, **d_accels, *d_hPos, *d_hVel, *d_accel_sum;
 double *d_mass;
 
 //initHostMemory: Create storage for numObjects entities in our system
@@ -107,30 +115,59 @@ int main(int argc, char **argv)
 	#endif
 
 
-	cudaMalloc((void**)&d_values, (NUMENTITIES*NUMENTITIES)*sizeof(vector3));
+	// cudaMalloc((void**)&d_values, (NUMENTITIES*NUMENTITIES)*sizeof(vector3));
+	// cudaCheckError();
 	cudaMalloc((void***)&d_accels, (NUMENTITIES)*sizeof(vector3));
-	cudaMalloc((void***)&d_hPos, (NUMENTITIES)*sizeof(vector3));
-	cudaMalloc((void***)&d_hVel, (NUMENTITIES)*sizeof(vector3));
+	cudaCheckError();
+
+	vector3* temp[NUMENTITIES];
+	for (int i = 0; i< NUMENTITIES; i++)
+	{
+		cudaMalloc(&temp[i], sizeof(vector3)*NUMENTITIES);
+	}
+	cudaMemcpy(d_accels, temp, sizeof(vector3*)*NUMENTITIES, cudaMemcpyHostToDevice);
+	cudaMalloc((void**)&d_hPos, (NUMENTITIES)*sizeof(vector3));
+	cudaCheckError();
+	cudaMalloc((void**)&d_hVel, (NUMENTITIES)*sizeof(vector3));
+	cudaCheckError();
 	cudaMalloc((void**)&d_accel_sum, (NUMENTITIES)*sizeof(vector3));
+	cudaCheckError();
 	cudaMalloc((void**)&d_mass, (NUMENTITIES)*sizeof(double));
+	cudaCheckError();
 
 	cudaMemcpy(d_hPos, hPos, (NUMENTITIES)*sizeof(vector3), cudaMemcpyHostToDevice);
+	cudaCheckError();
 	cudaMemcpy(d_hVel, hVel, (NUMENTITIES)*sizeof(vector3), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_mass, mass, (NUMENTITIES)*sizeof(vector3), cudaMemcpyHostToDevice);
+	cudaCheckError();
+	cudaMemcpy(d_mass, mass, (NUMENTITIES)*sizeof(double), cudaMemcpyHostToDevice);
+	cudaCheckError();
 
 	for (t_now=0;t_now<DURATION;t_now+=INTERVAL){
 		compute();
 	}
 
 	cudaMemcpy(hPos, d_hPos, (NUMENTITIES)*sizeof(vector3), cudaMemcpyDeviceToHost);
+	cudaCheckError();
 	cudaMemcpy(hVel, d_hVel, (NUMENTITIES)*sizeof(vector3), cudaMemcpyDeviceToHost);
+	cudaCheckError();
 	
-	cudaFree(d_values);
+	// cudaFree(d_values);
+	cudaMemcpy(temp, d_accels, (NUMENTITIES)*sizeof(vector3*), cudaMemcpyDeviceToHost);
+	// for (int i = 0; i< NUMENTITIES; i++)
+	// {
+	// 	cudaFree(&temp[i]);
+	// }
+	cudaCheckError();
 	cudaFree(d_accels);
+	cudaCheckError();
 	cudaFree(d_hPos);
+	cudaCheckError();
 	cudaFree(d_hVel);
+	cudaCheckError();
 	cudaFree(d_accel_sum);
+	cudaCheckError();
 	cudaFree(d_mass);
+	cudaCheckError();
 
 	clock_t t1=clock()-t0;
 #ifdef DEBUG
@@ -140,3 +177,4 @@ int main(int argc, char **argv)
 
 	freeHostMemory();
 }
+
