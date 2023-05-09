@@ -151,11 +151,10 @@ int main(int argc, char **argv)
 	cudaMemcpy(hVel, d_hVel, (NUMENTITIES)*sizeof(vector3), cudaMemcpyDeviceToHost);
 	cudaCheckError();
 	
-	// cudaFree(d_values);
-	//cudaMemcpy(temp, d_accels, (NUMENTITIES)*sizeof(vector3*), cudaMemcpyDeviceToHost);
+
 	for (int i = 0; i< NUMENTITIES; i++)
 	{
-		cudaFree(&temp[i]);
+		cudaFree(temp[i]);
 	}
 	cudaCheckError();
 	cudaFree(d_accels);

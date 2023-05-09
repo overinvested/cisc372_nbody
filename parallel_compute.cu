@@ -30,21 +30,23 @@ void compute(){
 	// vector3** accels=(vector3**)malloc(sizeof(vector3*)*NUMENTITIES);
 	
 	
-	int blocksPerDim=(NUMENTITIES+15)/16;
-	dim3 threadsPerBlock(16, 16, 3);
-	dim3 numBlocks(blocksPerDim,blocksPerDim);
-	// mapValuestoAccels<<<numBlocks, threadsPerBlock>>>(d_values, d_accels);
-	// cudaCheckError();
-	fillAccelSum<<<numBlocks, threadsPerBlock>>>(d_accel_sum);
+	int fillBlocks = (NUMENTITIES+15)/16;
+	dim3 fillThreads(16,3);
+	fillAccelSum<<<fillBlocks, fillThreads>>>(d_accel_sum);
 	cudaCheckError();
-	calculateAccels<<<numBlocks, threadsPerBlock>>>(d_accels, d_hPos, d_mass);
+	int blocksPerDim=(NUMENTITIES+15)/16;
+	dim3 calculateThreads(16, 16, 3);
+	dim3 calculateBlocks(blocksPerDim,blocksPerDim);
+	calculateAccels<<<calculateBlocks, calculateThreads>>>(d_accels, d_hPos, d_mass);
 	cudaCheckError();
 	int sumThreads = 1024;
 	dim3 sumBlocks(NUMENTITIES,3);
 	int sharedMemorySize = 2*sumThreads*sizeof(double);
 	sumColumns<<<sumBlocks, sumThreads, sharedMemorySize>>>(d_accels, d_accel_sum);
 	cudaCheckError();
-	updatePositionAndVelocity<<<numBlocks, threadsPerBlock>>>(d_accel_sum, d_hPos, d_hVel);
+	int updateBlocks = (NUMENTITIES+15)/16;
+	dim3 updateThreads(16,3);
+	updatePositionAndVelocity<<<updateBlocks, updateThreads>>>(d_accel_sum, d_hPos, d_hVel);
 	cudaCheckError();
 
 
@@ -85,27 +87,13 @@ void compute(){
 }
 
 
-__global__ void mapValuestoAccels(vector3* values, vector3** accels)
-{
-	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	int j = threadIdx.y + blockIdx.y * blockDim.y;
-	int k = threadIdx.z;
-	if (i >= NUMENTITIES || j > 0 || k > 0) return;
-
-	accels[i] = &values[i*NUMENTITIES];
-}
-
-
 __global__ void fillAccelSum(vector3* accel_sum)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	int j = threadIdx.y + blockIdx.y * blockDim.y;
-	int k = threadIdx.z;
+	int k = threadIdx.y;
 
-	if (i >= NUMENTITIES || j > 0) return;
-	// FILL_VECTOR(accel_sum[i],0,0,0);
+	if (i >= NUMENTITIES) return;
 	accel_sum[i][k] = 0;
-	// *accel_sum[i] = {0,0,0};
 }
 
 
@@ -114,20 +102,24 @@ __global__ void calculateAccels(vector3** accels, vector3* hPos, double* mass)
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
 	int k = threadIdx.z;
-	__shared__ vector3 distance;
-	if (i >= NUMENTITIES || j >= NUMENTITIES) return;
+	// __shared__ vector3 distance;
+	if (i >= NUMENTITIES || j >= NUMENTITIES || k > 0) return;
 	if (i==j)
 	{
-		accels[i][j][k] = 0;
+		FILL_VECTOR(accels[i][j],0,0,0);
 	}
 	else
 	{
-		distance[k] = hPos[i][k] - hPos[j][k];
-		__syncthreads();
+		vector3 distance;
+		for (int k = 0; k < 3; k++)
+		{
+			distance[k] = hPos[i][k] - hPos[j][k];
+		}
+		// __syncthreads();
 		double magnitude_sq = distance[0] * distance[0] + distance[1] * distance[1] + distance[2] * distance[2];
 		double magnitude = sqrt(magnitude_sq);
 		double accelmag = -1 * GRAV_CONSTANT * mass[j] / magnitude_sq;
-		accels[i][j][k]=accelmag*distance[k]/magnitude;
+		FILL_VECTOR(accels[i][j], accelmag*distance[0]/magnitude,accelmag*distance[1]/magnitude,accelmag*distance[2]/magnitude);
 	}
 }
 
@@ -178,9 +170,8 @@ __global__ void sumColumns(vector3** accels, vector3* accel_sum)
 __global__ void updatePositionAndVelocity(vector3* accel_sum, vector3* hPos, vector3* hVel)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	int j = threadIdx.y + blockIdx.y * blockDim.y;
-	int k = threadIdx.z;
-	if (i >= NUMENTITIES || j > 0) return;
+	int k = threadIdx.y;
+	if (i >= NUMENTITIES) return;
 
 	hVel[i][k] += accel_sum[i][k] * INTERVAL;
 	hPos[i][k] += hVel[i][k] * INTERVAL;
