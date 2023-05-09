@@ -102,24 +102,20 @@ __global__ void calculateAccels(vector3** accels, vector3* hPos, double* mass)
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
 	int k = threadIdx.z;
-	// __shared__ vector3 distance;
-	if (i >= NUMENTITIES || j >= NUMENTITIES || k > 0) return;
+	__shared__ vector3 distance[16][16];
+	if (i >= NUMENTITIES || j >= NUMENTITIES) return;
 	if (i==j)
 	{
-		FILL_VECTOR(accels[i][j],0,0,0);
+		accels[i][j][k] = 0;
 	}
 	else
 	{
-		vector3 distance;
-		for (int k = 0; k < 3; k++)
-		{
-			distance[k] = hPos[i][k] - hPos[j][k];
-		}
-		// __syncthreads();
-		double magnitude_sq = distance[0] * distance[0] + distance[1] * distance[1] + distance[2] * distance[2];
+		distance[threadIdx.x][threadIdx.y][k] = hPos[i][k] - hPos[j][k];
+		__syncthreads();
+		double magnitude_sq = distance[threadIdx.x][threadIdx.y][0] * distance[threadIdx.x][threadIdx.y][0] + distance[threadIdx.x][threadIdx.y][1] * distance[threadIdx.x][threadIdx.y][1] + distance[threadIdx.x][threadIdx.y][2] * distance[threadIdx.x][threadIdx.y][2];
 		double magnitude = sqrt(magnitude_sq);
 		double accelmag = -1 * GRAV_CONSTANT * mass[j] / magnitude_sq;
-		FILL_VECTOR(accels[i][j], accelmag*distance[0]/magnitude,accelmag*distance[1]/magnitude,accelmag*distance[2]/magnitude);
+		accels[i][j][k] = accelmag*distance[threadIdx.x][threadIdx.y][k]/magnitude;
 	}
 }
 
