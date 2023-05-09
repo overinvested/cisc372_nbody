@@ -114,6 +114,7 @@ __global__ void calculateAccels(vector3** accels, vector3* hPos, double* mass)
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
 	int k = threadIdx.z;
+	__shared__ vector3 distance;
 	if (i >= NUMENTITIES || j >= NUMENTITIES) return;
 	if (i==j)
 	{
@@ -121,7 +122,6 @@ __global__ void calculateAccels(vector3** accels, vector3* hPos, double* mass)
 	}
 	else
 	{
-		vector3 distance;
 		distance[k] = hPos[i][k] - hPos[j][k];
 		__syncthreads();
 		double magnitude_sq = distance[0] * distance[0] + distance[1] * distance[1] + distance[2] * distance[2];

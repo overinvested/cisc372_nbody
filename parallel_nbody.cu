@@ -117,7 +117,7 @@ int main(int argc, char **argv)
 
 	// cudaMalloc((void**)&d_values, (NUMENTITIES*NUMENTITIES)*sizeof(vector3));
 	// cudaCheckError();
-	cudaMalloc((void***)&d_accels, (NUMENTITIES)*sizeof(vector3));
+	cudaMalloc((void***)&d_accels, (NUMENTITIES)*sizeof(vector3*));
 	cudaCheckError();
 
 	vector3* temp[NUMENTITIES];
@@ -152,11 +152,11 @@ int main(int argc, char **argv)
 	cudaCheckError();
 	
 	// cudaFree(d_values);
-	cudaMemcpy(temp, d_accels, (NUMENTITIES)*sizeof(vector3*), cudaMemcpyDeviceToHost);
-	// for (int i = 0; i< NUMENTITIES; i++)
-	// {
-	// 	cudaFree(&temp[i]);
-	// }
+	//cudaMemcpy(temp, d_accels, (NUMENTITIES)*sizeof(vector3*), cudaMemcpyDeviceToHost);
+	for (int i = 0; i< NUMENTITIES; i++)
+	{
+		cudaFree(&temp[i]);
+	}
 	cudaCheckError();
 	cudaFree(d_accels);
 	cudaCheckError();
