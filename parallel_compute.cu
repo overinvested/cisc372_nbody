@@ -16,30 +16,17 @@ extern double *d_mass;
 //Returns: None
 //Side Effect: Modifies the hPos and hVel arrays with the new positions and accelerations after 1 INTERVAL
 void compute(){
-	int fillBlocks = (NUMENTITIES+7)/8;
-	dim3 fillThreads(8,3);
-	fillAccelSum<<<fillBlocks, fillThreads>>>(d_accel_sum);
 	int blocksPerDim=(NUMENTITIES+7)/8;
 	dim3 calculateThreads(8, 8, 3);
 	dim3 calculateBlocks(blocksPerDim,blocksPerDim);
 	calculateAccels<<<calculateBlocks, calculateThreads>>>(d_accels, d_hPos, d_mass);
-	int sumThreads = 1024;
+	int sumThreads = 64;
 	dim3 sumBlocks(NUMENTITIES,3);
 	int sharedMemorySize = 2*sumThreads*sizeof(double);
 	sumColumns<<<sumBlocks, sumThreads, sharedMemorySize>>>(d_accels, d_accel_sum);
 	int updateBlocks = (NUMENTITIES+7)/8;
 	dim3 updateThreads(8,3);
 	updatePositionAndVelocity<<<updateBlocks, updateThreads>>>(d_accel_sum, d_hPos, d_hVel);
-}
-
-
-__global__ void fillAccelSum(vector3* accel_sum)
-{
-	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	int k = threadIdx.y;
-
-	if (i >= NUMENTITIES) return;
-	accel_sum[i][k] = 0;
 }
 
 
